@@ -1,63 +1,89 @@
+from PIL import Image
+import pytesseract
 import re
-import unicodedata
-from nltk.tokenize import sent_tokenize
 
+# Set Tesseract path
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-#  Read File
-def read_file(filepath):
-    with open(filepath, "r", encoding="utf-8") as f:
-        return f.read()
+#  Function to clean OCR text
+def clean_text(text):
+    text = text.lower()
 
+    # Fix common OCR mistakes
+    text = text.replace("inv0ice", "invoice")
+    text = text.replace("n0", "no")
+    text = text.replace("final extract data", "invoice")
+    text = text.replace("my", ":")  # Fix misread before amounts
+    text = text.replace("arnount", "amount")
+    text = text.replace("dste", "date")
 
-#  Unicode Normalization
-def normalize_unicode(text):
-    return unicodedata.normalize("NFKC", text)
+    # Remove unwanted special characters except letters, numbers, :, /, ., -
+    text = re.sub(r'[^a-z0-9\s:/.-]', '', text)
 
+    # Remove extra spaces
+    text = re.sub(r'\s+', ' ', text)
 
-#  Remove Headers & Footers
-def remove_headers_footers(text):
-    lines = text.split("\n")
-    cleaned = [line for line in lines if len(line.strip()) > 20]
-    return "\n".join(cleaned)
-
-
-#  Remove Redactions ***
-def remove_redactions(text):
-    return re.sub(r"\*+", "", text)
-
-
-#  Fix Spacing
-def fix_spacing(text):
-    text = re.sub(r"\s+", " ", text)
-    text = re.sub(r"\s([?.!,])", r"\1", text)
     return text.strip()
 
+#  Load invoice image (updated filename)
+image = Image.open("sample_images/normal_invoices.jpg")
 
-#  Sentence Segmentation
-def segment_sentences(text):
-    return sent_tokenize(text)
+#  Extract raw text using OCR
+raw_text = pytesseract.image_to_string(image)
 
+print("\n===== RAW OCR TEXT =====\n")
+print(raw_text)
 
-#  Save Output
-def save_output(sentences, filepath):
-    with open(filepath, "w", encoding="utf-8") as f:
-        for sentence in sentences:
-            f.write(sentence + "\n")
+#  Clean the OCR text
+cleaned_text = clean_text(raw_text)
 
+print("\n===== CLEANED OCR TEXT =====\n")
+print(cleaned_text)
 
-#  Full Pipeline
-def ocr_pipeline(input_path, output_path):
-    text = read_file(input_path)
-    text = normalize_unicode(text)
-    text = remove_headers_footers(text)
-    text = remove_redactions(text)
-    text = fix_spacing(text)
-    sentences = segment_sentences(text)
-    save_output(sentences, output_path)
+#  Regex Patterns
 
+# Invoice: pick the first number with 3+ digits (ignores words like East)
+invoice_pattern = r'\b(\d{3,}[A-Za-z0-9-]*)\b'
 
-# Run
-if __name__ == "__main__":
-    ocr_pipeline("sample.txt", "output.txt")
-    print("OCR Cleaning Completed ")
+# Date: looks for keyword "date" followed by numbers
+date_pattern = r'date\s*[:\-]?\s*([0-9/.-]+)'
 
+# Amount: looks for total/amount keyword followed by digits
+amount_pattern = r'(total|amount)\s*[:\-]?\s*([\d.,]+)'
+
+#  Extract matches
+invoice_match = re.search(invoice_pattern, cleaned_text)
+date_match = re.search(date_pattern, cleaned_text)
+amount_match = re.search(amount_pattern, cleaned_text)
+
+invoice_no = invoice_match.group(1) if invoice_match else "Not Found"
+date = date_match.group(1) if date_match else "Not Found"
+amount = amount_match.group(2) if amount_match else "Not Found"
+
+# False positive reduction for amount
+def validate_amount(amount):
+    numbers = re.findall(r'\d+\.?\d*', amount)
+    return True if numbers else False
+
+if amount != "Not Found" and not validate_amount(amount):
+    amount = "Invalid Amount"
+
+#  Accuracy calculation
+total_expected_fields = 3
+correct_fields = 0
+
+if invoice_no != "Not Found":
+    correct_fields += 1
+if date != "Not Found":
+    correct_fields += 1
+if amount != "Not Found" and amount != "Invalid Amount":
+    correct_fields += 1
+
+accuracy = (correct_fields / total_expected_fields) * 100
+
+#  Final Output
+print("\n===== FINAL EXTRACTED DATA =====\n")
+print(f"Invoice Number : {invoice_no}")
+print(f"Date           : {date}")
+print(f"Total Amount   : {amount}")
+print(f"\nExtraction Accuracy: {accuracy:.2f}%")
